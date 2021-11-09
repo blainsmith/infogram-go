@@ -4,21 +4,54 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"time"
 )
 
-type Infoghaphic struct {
-	Id        int       `json:"id"`
-	Title     string    `json:"title"`
-	Thumbnail *url.URL  `json:"thumbnail_url"`
-	ThemeId   int       `json:"theme_id"`
-	Published bool      `json:"published"`
-	Modified  time.Time `json:"date_modified"`
-	URL       *url.URL  `json:"url"`
+// Infographic defines the type returned by the Infogram API
+type Infographic struct {
+	Id        int
+	Title     string
+	Thumbnail *url.URL
+	ThemeId   int
+	Published bool
+	Modified  time.Time
+	URL       *url.URL
 }
 
-func (i *Infoghaphic) MarshalJSON() ([]byte, error) {
+func (i *Infographic) reader(client *Client, format string) (io.Reader, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s&format=%s", client.endpoint, "infographics", i.Id, client.apiKey, format), nil)
+	if err != nil {
+		return nil, fmt.Errorf("new infographic PDF reader request: %w", err)
+	}
+
+	res, err := client.signAndDo(req)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.Body, nil
+}
+
+// PDFReader returns an io.Reader of the Infographic in PDF format
+func (i *Infographic) PDFReader(client *Client) (io.Reader, error) {
+	return i.reader(client, "pdf")
+}
+
+// PNGReader returns an io.Reader of the Infographic in PNG format
+func (i *Infographic) PNGReader(client *Client) (io.Reader, error) {
+	return i.reader(client, "png")
+}
+
+// HTMLReader returns an io.Reader of the Infographic in HTML format
+func (i *Infographic) HTMLReader(client *Client) (io.Reader, error) {
+	return i.reader(client, "html")
+}
+
+// MarshalJSON implements json.Marshaler
+func (i *Infographic) MarshalJSON() ([]byte, error) {
 	data := make(map[string]interface{})
 
 	data["id"] = i.Id
@@ -36,7 +69,8 @@ func (i *Infoghaphic) MarshalJSON() ([]byte, error) {
 	return bytes, nil
 }
 
-func (i *Infoghaphic) UnmarshalJSON(bytes []byte) error {
+// UnmarshalJSON implements json.Unarshaler
+func (i *Infographic) UnmarshalJSON(bytes []byte) error {
 	data := make(map[string]interface{})
 
 	if err := json.Unmarshal(bytes, &data); err != nil {
@@ -108,12 +142,14 @@ func (i *Infoghaphic) UnmarshalJSON(bytes []byte) error {
 	return nil
 }
 
+// Theme defines the type returned by the Infogram API
 type Theme struct {
-	Id        int      `json:"id"`
-	Title     string   `json:"title"`
-	Thumbnail *url.URL `json:"thumbnail_url"`
+	Id        int
+	Title     string
+	Thumbnail *url.URL
 }
 
+// MarshalJSON implements json.Marshaler
 func (t *Theme) MarshalJSON() ([]byte, error) {
 	data := make(map[string]interface{})
 
@@ -124,6 +160,7 @@ func (t *Theme) MarshalJSON() ([]byte, error) {
 	return json.Marshal(data)
 }
 
+// UnmarshalJSON implements json.Unmarshaler
 func (t *Theme) UnmarshalJSON(bytes []byte) error {
 	data := make(map[string]interface{})
 

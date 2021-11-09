@@ -12,11 +12,14 @@ import (
 )
 
 const (
+	// DefaultEndpoint is the default API endpoint for Infogram
 	DefaultEndpoint = "https://infogr.am/service/v1"
 )
 
+// ClientOpts defines optional configuration settings when creating a Client
 type ClientOpts func(*Client)
 
+// Client is used to interact with the Infogram API
 type Client struct {
 	httpClient *http.Client
 	endpoint   string
@@ -24,6 +27,7 @@ type Client struct {
 	apiSecret  string
 }
 
+// NewClient creates a Client with the specified API key and secret and any ClientOpts provided
 func NewClient(apiKey string, apiSecret string, options ...ClientOpts) *Client {
 	c := Client{
 		httpClient: http.DefaultClient,
@@ -39,18 +43,21 @@ func NewClient(apiKey string, apiSecret string, options ...ClientOpts) *Client {
 	return &c
 }
 
+// ClientOptHTTPClient overrides the http.DefaultClient with the one specified
 func ClientOptHTTPClient(httpClient *http.Client) func(*Client) {
 	return func(client *Client) {
 		client.httpClient = httpClient
 	}
 }
 
+// ClientOptEndpoint overrides the DefaultEndpoint with the one specified
 func ClientOptEndpoint(endpoint string) func(*Client) {
 	return func(client *Client) {
 		client.endpoint = endpoint
 	}
 }
 
+// SignRequest adds the `api_sig` query parameter in accordance with https://developers.infogr.am/rest/request-signing.html
 func (c *Client) SignRequest(req *http.Request) error {
 	query := req.URL.Query()
 
@@ -100,7 +107,8 @@ func (c *Client) signAndDo(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-func (c *Client) Infographics() ([]Infoghaphic, error) {
+// Infographics fetches the list of infographics
+func (c *Client) Infographics() ([]Infographic, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.endpoint, "infographics", c.apiKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographics request: %w", err)
@@ -108,10 +116,10 @@ func (c *Client) Infographics() ([]Infoghaphic, error) {
 
 	res, err := c.signAndDo(req)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
-	var infographics []Infoghaphic
+	var infographics []Infographic
 	if err := json.NewDecoder(res.Body).Decode(&infographics); err != nil {
 		return nil, err
 	}
@@ -119,7 +127,8 @@ func (c *Client) Infographics() ([]Infoghaphic, error) {
 	return infographics, nil
 }
 
-func (c *Client) Infographic(id int) (*Infoghaphic, error) {
+// Infographics fetches a single infographic by identification number
+func (c *Client) Infographic(id int) (*Infographic, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s", c.endpoint, "infographics", id, c.apiKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographic request: %w", err)
@@ -130,10 +139,50 @@ func (c *Client) Infographic(id int) (*Infoghaphic, error) {
 		return nil, nil
 	}
 
-	var infographic Infoghaphic
+	var infographic Infographic
 	if err := json.NewDecoder(res.Body).Decode(&infographic); err != nil {
 		return nil, err
 	}
 
 	return &infographic, nil
+}
+
+// UserInfographics fetches the list of infographics for the user's identification number
+func (c *Client) UserInfographics(id string) ([]Infographic, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s?api_key=%s", c.endpoint, "users", id, "infographics", c.apiKey), nil)
+	if err != nil {
+		return nil, fmt.Errorf("new infographics request: %w", err)
+	}
+
+	res, err := c.signAndDo(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var infographics []Infographic
+	if err := json.NewDecoder(res.Body).Decode(&infographics); err != nil {
+		return nil, err
+	}
+
+	return infographics, nil
+}
+
+// Infographics fetches a available themes to use for infographics
+func (c *Client) Themes() ([]Theme, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.endpoint, "themes", c.apiKey), nil)
+	if err != nil {
+		return nil, fmt.Errorf("new themes request: %w", err)
+	}
+
+	res, err := c.signAndDo(req)
+	if err != nil {
+		return nil, err
+	}
+
+	var themes []Theme
+	if err := json.NewDecoder(res.Body).Decode(&themes); err != nil {
+		return nil, err
+	}
+
+	return themes, nil
 }
