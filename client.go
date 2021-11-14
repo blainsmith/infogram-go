@@ -2,13 +2,17 @@ package infogram
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sort"
+	"sync"
 )
 
 const (
@@ -16,50 +20,97 @@ const (
 	DefaultEndpoint = "https://infogr.am/service/v1"
 )
 
-// ClientOpts defines optional configuration settings when creating a Client
-type ClientOpts func(*Client)
-
 // Client is used to interact with the Infogram API
 type Client struct {
-	httpClient *http.Client
-	endpoint   string
-	apiKey     string
-	apiSecret  string
+	setup sync.Once
+
+	HTTPClient *http.Client
+	Endpoint   string
+	APIKey     string
+	APISecret  string
 }
 
-// NewClient creates a Client with the specified API key and secret and any ClientOpts provided
-func NewClient(apiKey string, apiSecret string, options ...ClientOpts) *Client {
-	c := Client{
-		httpClient: http.DefaultClient,
-		endpoint:   DefaultEndpoint,
-		apiKey:     apiKey,
-		apiSecret:  apiSecret,
+// NewRequest creates a proper http.Request for the HTTP call with the correct body data and encoding headers
+func (c *Client) NewRequest(method string, path string, params url.Values, body interface{}) (*http.Request, error) {
+	path = c.Endpoint + path
+
+	var buf io.ReadWriter
+	if body != nil {
+		buf = new(bytes.Buffer)
+		enc := json.NewEncoder(buf)
+		enc.SetEscapeHTML(false)
+		err := enc.Encode(body)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	for _, opts := range options {
-		opts(&c)
+	req, err := http.NewRequest(method, path, buf)
+	if err != nil {
+		return nil, err
+	}
+	req.URL.RawQuery = params.Encode()
+
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 
-	return &c
+	return req, nil
+
 }
 
-// ClientOptHTTPClient overrides the http.DefaultClient with the one specified
-func ClientOptHTTPClient(httpClient *http.Client) func(*Client) {
-	return func(client *Client) {
-		client.httpClient = httpClient
+// Do performs the *http.Request and decodes the http.Response.Body into v and return the *http.Response. If v is an io.Writer it will copy the body to the writer.
+func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*http.Response, error) {
+	c.setup.Do(func() {
+		if c.HTTPClient == nil {
+			c.HTTPClient = http.DefaultClient
+		}
+
+		if c.Endpoint == "" {
+			c.Endpoint = DefaultEndpoint
+		}
+	})
+
+	res, err := c.HTTPClient.Do(req)
+	if err != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
 	}
+	defer res.Body.Close()
+
+	if res.StatusCode > 299 {
+		errBody, err := io.ReadAll(res.Body)
+		if err != nil {
+			return nil, err
+		}
+
+		return nil, errors.New(string(errBody))
+	}
+
+	if v != nil {
+		if w, ok := v.(io.Writer); ok {
+			io.Copy(w, res.Body)
+		} else {
+			decErr := json.NewDecoder(res.Body).Decode(v)
+			if decErr == io.EOF {
+				decErr = nil // ignore EOF errors caused by empty response body
+			}
+			if decErr != nil {
+				return nil, decErr
+			}
+		}
+	}
+
+	return res, nil
 }
 
-// ClientOptEndpoint overrides the DefaultEndpoint with the one specified
-func ClientOptEndpoint(endpoint string) func(*Client) {
-	return func(client *Client) {
-		client.endpoint = endpoint
-	}
-}
-
-// SignRequest adds the `api_sig` query parameter in accordance with https://developers.infogr.am/rest/request-signing.html
+// SignRequest adds the `api_key` and `api_sig` query parameter in accordance with https://developers.infogr.am/rest/request-signing.html
 func (c *Client) SignRequest(req *http.Request) error {
 	query := req.URL.Query()
+	query.Set("api_key", c.APIKey)
 
 	var sig bytes.Buffer
 	sig.WriteString(req.Method)
@@ -85,7 +136,7 @@ func (c *Client) SignRequest(req *http.Request) error {
 
 	sig.WriteString(url.QueryEscape(params.String()))
 
-	h := hmac.New(sha1.New, []byte(c.apiSecret))
+	h := hmac.New(sha1.New, []byte(c.APISecret))
 	signature := h.Sum(sig.Bytes())
 
 	query.Set("api_sig", fmt.Sprintf("%x", signature))
@@ -94,33 +145,21 @@ func (c *Client) SignRequest(req *http.Request) error {
 	return nil
 }
 
-func (c *Client) signAndDo(req *http.Request) (*http.Response, error) {
-	if err := c.SignRequest(req); err != nil {
-		return nil, err
-	}
-
-	res, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
 // Infographics fetches the list of infographics
 func (c *Client) Infographics() ([]Infographic, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.endpoint, "infographics", c.apiKey), nil)
+	req, err := c.NewRequest(http.MethodGet, "/infographics", nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographics request: %w", err)
 	}
 
-	res, err := c.signAndDo(req)
+	err = c.SignRequest(req)
 	if err != nil {
 		return nil, err
 	}
 
 	var infographics []Infographic
-	if err := json.NewDecoder(res.Body).Decode(&infographics); err != nil {
+	_, err = c.Do(context.Background(), req, &infographics)
+	if err != nil {
 		return nil, err
 	}
 
@@ -129,19 +168,15 @@ func (c *Client) Infographics() ([]Infographic, error) {
 
 // Infographics fetches a single infographic by identification number
 func (c *Client) Infographic(id int) (*Infographic, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s", c.endpoint, "infographics", id, c.apiKey), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s", c.Endpoint, "infographics", id, c.APIKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographic request: %w", err)
 	}
 
-	res, err := c.signAndDo(req)
+	var infographic Infographic
+	_, err = c.Do(context.Background(), req, &infographic)
 	if err != nil {
 		return nil, nil
-	}
-
-	var infographic Infographic
-	if err := json.NewDecoder(res.Body).Decode(&infographic); err != nil {
-		return nil, err
 	}
 
 	return &infographic, nil
@@ -149,19 +184,15 @@ func (c *Client) Infographic(id int) (*Infographic, error) {
 
 // UserInfographics fetches the list of infographics for the user's identification number
 func (c *Client) UserInfographics(id string) ([]Infographic, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s?api_key=%s", c.endpoint, "users", id, "infographics", c.apiKey), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s?api_key=%s", c.Endpoint, "users", id, "infographics", c.APIKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographics request: %w", err)
 	}
 
-	res, err := c.signAndDo(req)
-	if err != nil {
-		return nil, err
-	}
-
 	var infographics []Infographic
-	if err := json.NewDecoder(res.Body).Decode(&infographics); err != nil {
-		return nil, err
+	_, err = c.Do(context.Background(), req, &infographics)
+	if err != nil {
+		return nil, nil
 	}
 
 	return infographics, nil
@@ -169,19 +200,15 @@ func (c *Client) UserInfographics(id string) ([]Infographic, error) {
 
 // Infographics fetches a available themes to use for infographics
 func (c *Client) Themes() ([]Theme, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.endpoint, "themes", c.apiKey), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.Endpoint, "themes", c.APIKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new themes request: %w", err)
 	}
 
-	res, err := c.signAndDo(req)
-	if err != nil {
-		return nil, err
-	}
-
 	var themes []Theme
-	if err := json.NewDecoder(res.Body).Decode(&themes); err != nil {
-		return nil, err
+	_, err = c.Do(context.Background(), req, &themes)
+	if err != nil {
+		return nil, nil
 	}
 
 	return themes, nil

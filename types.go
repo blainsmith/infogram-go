@@ -1,6 +1,7 @@
 package infogram
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,12 +23,17 @@ type Infographic struct {
 }
 
 func (i *Infographic) reader(client *Client, format string) (io.Reader, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s&format=%s", client.endpoint, "infographics", i.Id, client.apiKey, format), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s&format=%s", client.Endpoint, "infographics", i.Id, client.APIKey, format), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographic PDF reader request: %w", err)
 	}
 
-	res, err := client.signAndDo(req)
+	err = client.SignRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
+	res, err := client.Do(context.Background(), req, nil)
 	if err != nil {
 		return nil, err
 	}
