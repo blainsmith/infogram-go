@@ -84,11 +84,11 @@ func (i *Infographic) UnmarshalJSON(bytes []byte) error {
 	}
 
 	if val, found := data["id"]; found {
-		v, ok := val.(int)
+		v, ok := val.(float64)
 		if !ok {
 			return errors.New("id needs to be an int")
 		}
-		i.Id = v
+		i.Id = int(v)
 	}
 	if val, found := data["title"]; found {
 		v, ok := val.(string)
@@ -109,11 +109,11 @@ func (i *Infographic) UnmarshalJSON(bytes []byte) error {
 		}
 	}
 	if val, found := data["theme_id"]; found {
-		v, ok := val.(int)
+		v, ok := val.(float64)
 		if !ok {
 			return errors.New("theme_id needs to be an int")
 		}
-		i.ThemeId = v
+		i.ThemeId = int(v)
 	}
 	if val, found := data["published"]; found {
 		v, ok := val.(bool)
@@ -170,12 +170,16 @@ func (t *Theme) MarshalJSON() ([]byte, error) {
 func (t *Theme) UnmarshalJSON(bytes []byte) error {
 	data := make(map[string]interface{})
 
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		return fmt.Errorf("unmarshalling theme: %w", err)
+	}
+
 	if val, found := data["id"]; found {
-		v, ok := val.(int)
+		v, ok := val.(float64)
 		if !ok {
 			return errors.New("id needs to be an int")
 		}
-		t.Id = v
+		t.Id = int(v)
 	}
 	if val, found := data["title"]; found {
 		v, ok := val.(string)
