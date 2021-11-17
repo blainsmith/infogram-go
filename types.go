@@ -62,10 +62,14 @@ func (i *Infographic) MarshalJSON() ([]byte, error) {
 
 	data["id"] = i.Id
 	data["title"] = i.Title
-	data["thumbnail_url"] = i.Thumbnail.String()
+	if i.Thumbnail != nil {
+		data["thumbnail_url"] = i.Thumbnail.String()
+	}
 	data["theme_id"] = i.ThemeId
 	data["published"] = i.Published
-	data["url"] = i.URL.String()
+	if i.URL != nil {
+		data["url"] = i.URL.String()
+	}
 
 	bytes, err := json.Marshal(data)
 	if err != nil {

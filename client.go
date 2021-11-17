@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -49,7 +50,10 @@ func (c *Client) NewRequest(method string, path string, params url.Values, body 
 	if err != nil {
 		return nil, err
 	}
-	req.URL.RawQuery = params.Encode()
+
+	if params != nil {
+		req.URL.RawQuery = params.Encode()
+	}
 
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
@@ -71,8 +75,11 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*htt
 		}
 	})
 
+	req.RequestURI = ""
+
 	res, err := c.HTTPClient.Do(req)
 	if err != nil {
+		log.Fatal(err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -173,6 +180,11 @@ func (c *Client) Infographic(id int) (*Infographic, error) {
 		return nil, fmt.Errorf("new infographic request: %w", err)
 	}
 
+	err = c.SignRequest(req)
+	if err != nil {
+		return nil, err
+	}
+
 	var infographic Infographic
 	_, err = c.Do(context.Background(), req, &infographic)
 	if err != nil {
@@ -186,7 +198,12 @@ func (c *Client) Infographic(id int) (*Infographic, error) {
 func (c *Client) UserInfographics(id string) ([]Infographic, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s?api_key=%s", c.Endpoint, "users", id, "infographics", c.APIKey), nil)
 	if err != nil {
-		return nil, fmt.Errorf("new infographics request: %w", err)
+		return nil, fmt.Errorf("new user infographics request: %w", err)
+	}
+
+	err = c.SignRequest(req)
+	if err != nil {
+		return nil, err
 	}
 
 	var infographics []Infographic
@@ -203,6 +220,11 @@ func (c *Client) Themes() ([]Theme, error) {
 	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.Endpoint, "themes", c.APIKey), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new themes request: %w", err)
+	}
+
+	err = c.SignRequest(req)
+	if err != nil {
+		return nil, err
 	}
 
 	var themes []Theme
