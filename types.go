@@ -13,7 +13,7 @@ import (
 
 // Infographic defines the type returned by the Infogram API
 type Infographic struct {
-	Id        int
+	Id        string
 	Title     string
 	Thumbnail *url.URL
 	ThemeId   int
@@ -23,7 +23,7 @@ type Infographic struct {
 }
 
 func (i *Infographic) reader(client *Client, format string) (io.Reader, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s&format=%s", client.Endpoint, "infographics", i.Id, client.APIKey, format), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s?api_key=%s&format=%s", client.Endpoint, "infographics", i.Id, client.APIKey, format), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographic PDF reader request: %w", err)
 	}
@@ -88,11 +88,11 @@ func (i *Infographic) UnmarshalJSON(bytes []byte) error {
 	}
 
 	if val, found := data["id"]; found {
-		v, ok := val.(float64)
+		v, ok := val.(string)
 		if !ok {
 			return errors.New("id needs to be an int")
 		}
-		i.Id = int(v)
+		i.Id = v
 	}
 	if val, found := data["title"]; found {
 		v, ok := val.(string)
@@ -192,7 +192,7 @@ func (t *Theme) UnmarshalJSON(bytes []byte) error {
 		}
 		t.Title = v
 	}
-	if val, found := data["thumbnail_url"]; found {
+	if val, found := data["thumbnail_url"]; val != nil && found {
 		v, ok := val.(string)
 		if !ok {
 			return errors.New("thumbnail_url needs to be an string")

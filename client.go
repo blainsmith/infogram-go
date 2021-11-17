@@ -5,11 +5,10 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -31,38 +30,6 @@ type Client struct {
 	APISecret  string
 }
 
-// NewRequest creates a proper http.Request for the HTTP call with the correct body data and encoding headers
-func (c *Client) NewRequest(method string, path string, params url.Values, body interface{}) (*http.Request, error) {
-	path = c.Endpoint + path
-
-	var buf io.ReadWriter
-	if body != nil {
-		buf = new(bytes.Buffer)
-		enc := json.NewEncoder(buf)
-		enc.SetEscapeHTML(false)
-		err := enc.Encode(body)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	req, err := http.NewRequest(method, path, buf)
-	if err != nil {
-		return nil, err
-	}
-
-	if params != nil {
-		req.URL.RawQuery = params.Encode()
-	}
-
-	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
-
-	return req, nil
-
-}
-
 // Do performs the *http.Request and decodes the http.Response.Body into v and return the *http.Response. If v is an io.Writer it will copy the body to the writer.
 func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*http.Response, error) {
 	c.setup.Do(func() {
@@ -79,7 +46,6 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*htt
 
 	res, err := c.HTTPClient.Do(req)
 	if err != nil {
-		log.Fatal(err)
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -89,12 +55,12 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*htt
 	defer res.Body.Close()
 
 	if res.StatusCode > 299 {
-		errBody, err := io.ReadAll(res.Body)
+		_, err := io.ReadAll(res.Body)
 		if err != nil {
 			return nil, err
 		}
 
-		return nil, errors.New(string(errBody))
+		return nil, fmt.Errorf("code: %d, message: ", res.StatusCode)
 	}
 
 	if v != nil {
@@ -116,45 +82,61 @@ func (c *Client) Do(ctx context.Context, req *http.Request, v interface{}) (*htt
 
 // SignRequest adds the `api_key` and `api_sig` query parameter in accordance with https://developers.infogr.am/rest/request-signing.html
 func (c *Client) SignRequest(req *http.Request) error {
-	query := req.URL.Query()
-	query.Set("api_key", c.APIKey)
+	var data url.Values
+
+	switch req.Method {
+	case http.MethodGet, http.MethodDelete:
+		data = req.URL.Query()
+	default:
+		req.ParseForm()
+		data = req.Form
+	}
+
+	data.Set("api_key", c.APIKey)
 
 	var sig bytes.Buffer
 	sig.WriteString(req.Method)
 	sig.WriteByte('&')
-	sig.WriteString(req.URL.EscapedPath())
+	sig.WriteString(url.QueryEscape(req.URL.String()))
 	sig.WriteByte('&')
 
-	var queryKeys []string
-	for key := range query {
-		queryKeys = append(queryKeys, key)
+	var dataKeys []string
+	for key := range data {
+		dataKeys = append(dataKeys, key)
 	}
-	sort.Slice(queryKeys, func(i int, j int) bool { return queryKeys[i] < queryKeys[j] })
+	sort.Slice(dataKeys, func(i int, j int) bool { return dataKeys[i] < dataKeys[j] })
 
 	var params bytes.Buffer
-	for idx, key := range queryKeys {
-		params.WriteString(url.QueryEscape(key))
-		params.WriteByte('=')
-		params.WriteString(url.QueryEscape(query.Get(key)))
-		if idx < len(queryKeys) {
-			params.WriteByte('&')
+	for idx, key := range dataKeys {
+		params.WriteString(key)
+		params.WriteString("=")
+		params.WriteString(data.Get(key))
+		if idx < len(dataKeys)-1 {
+			params.WriteString("&")
 		}
 	}
 
 	sig.WriteString(url.QueryEscape(params.String()))
 
 	h := hmac.New(sha1.New, []byte(c.APISecret))
-	signature := h.Sum(sig.Bytes())
+	h.Write(sig.Bytes())
+	signature := h.Sum(nil)
 
-	query.Set("api_sig", fmt.Sprintf("%x", signature))
-	req.URL.RawQuery = query.Encode()
+	data.Add("api_sig", base64.StdEncoding.EncodeToString(signature))
+
+	switch req.Method {
+	case http.MethodGet, http.MethodDelete:
+		req.URL.RawQuery = data.Encode()
+	default:
+		req.Form = data
+	}
 
 	return nil
 }
 
 // Infographics fetches the list of infographics
 func (c *Client) Infographics() ([]Infographic, error) {
-	req, err := c.NewRequest(http.MethodGet, "/infographics", nil, nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s", c.Endpoint, "infographics"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographics request: %w", err)
 	}
@@ -174,8 +156,8 @@ func (c *Client) Infographics() ([]Infographic, error) {
 }
 
 // Infographics fetches a single infographic by identification number
-func (c *Client) Infographic(id int) (*Infographic, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%d?api_key=%s", c.Endpoint, "infographics", id, c.APIKey), nil)
+func (c *Client) Infographic(id string) (*Infographic, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s", c.Endpoint, "infographics", id), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new infographic request: %w", err)
 	}
@@ -196,7 +178,7 @@ func (c *Client) Infographic(id int) (*Infographic, error) {
 
 // UserInfographics fetches the list of infographics for the user's identification number
 func (c *Client) UserInfographics(id string) ([]Infographic, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s?api_key=%s", c.Endpoint, "users", id, "infographics", c.APIKey), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s/%s/%s", c.Endpoint, "users", id, "infographics"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new user infographics request: %w", err)
 	}
@@ -217,7 +199,7 @@ func (c *Client) UserInfographics(id string) ([]Infographic, error) {
 
 // Infographics fetches a available themes to use for infographics
 func (c *Client) Themes() ([]Theme, error) {
-	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s?api_key=%s", c.Endpoint, "themes", c.APIKey), nil)
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s/%s", c.Endpoint, "themes"), nil)
 	if err != nil {
 		return nil, fmt.Errorf("new themes request: %w", err)
 	}
@@ -230,7 +212,7 @@ func (c *Client) Themes() ([]Theme, error) {
 	var themes []Theme
 	_, err = c.Do(context.Background(), req, &themes)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 
 	return themes, nil

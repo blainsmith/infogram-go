@@ -21,7 +21,7 @@ func TestInfographic(t *testing.T) {
 		c.Assert(err, quicktest.IsNil)
 
 		infographic := infogram.Infographic{
-			Id:        100,
+			Id:        "100",
 			Title:     "One Hundred",
 			Thumbnail: thumbnailURL,
 			ThemeId:   200,
